@@ -43,7 +43,7 @@ struct RGB
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
 void addBlur(Image& source);
-RGB calculateBlur(Image& source, int u, int v);
+RGB calculateBlur(Image& source, int u, int v, int gridSize);
 RGB getRGBAtPosition(Image& source, int u, int v);
 int getPosition(Image& source, int u, int v);
 int readInpImg(const char* fname, Image& source, int& max_col_val);
@@ -114,13 +114,8 @@ void addBlur(Image &source)
 	{
 		for(int u = 0; u < source.width; u++)
 		{
-			unsigned char r, g, b;
 			int p = getPosition(source, u, v);
-			r = source.img[p];
-			g = source.img[p + 1];
-			b = source.img[p + 2];
-
-			RGB rgb = calculateBlur(source, u, v);
+			RGB rgb = calculateBlur(source, u, v, 3);
 			source.dev_img[p] = rgb[0];
 			source.dev_img[p+1] = rgb[1];
 			source.dev_img[p+2] = rgb[2];
@@ -128,17 +123,18 @@ void addBlur(Image &source)
 	}
 }
 
-RGB calculateBlur(Image& source, int u, int v)
+RGB calculateBlur(Image& source, int u, int v, int gridSize)
 {
 	int p = getPosition(source, u, v);
 	RGB rgb;
 
-	int r = 0, g = 0, b = 0;
 	int count = 0;
-	for (int j = -1; j <= 1; j++) {
-		for (int i = -1; i <= 1; i++)
+	int i_bound = gridSize / 2;
+	int j_bound = gridSize / 2;
+	for (int j = -j_bound; j <= j_bound; j++) {
+		for (int i = -i_bound; i <= i_bound; i++)
 		{
-			if (u + i < 0 || u + i >= source.width || v + j < 0 || v + j >= source.height)
+			if (u + i < 0 || u + i >= source.width || v + j < 0 || v + j >= source.height) // skip if past edge of image
 				continue;
 			
 			rgb = rgb + getRGBAtPosition(source, u + i, v + j);
