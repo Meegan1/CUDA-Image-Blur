@@ -18,14 +18,27 @@ struct Image {
 	unsigned char* dev_img;
 };
 
+typedef int Color;
 struct RGB
 {
-	unsigned char rgb[3];
+	Color rgb[3]{0};
 
-	unsigned char & operator[](int i)
+	RGB() = default;
+
+	RGB(int r, int g, int b)
+	{
+		rgb[0] = r;
+		rgb[1] = g;
+		rgb[2] = b;
+	}
+
+	Color & operator[](int i)
 	{
 		return rgb[i];
 	}
+
+	RGB operator / (int num) { return { rgb[0] / num, rgb[1] / num, rgb[2] / num }; }
+	RGB operator + (const RGB& color) { return { rgb[0] + color.rgb[0], rgb[1] + color.rgb[1], rgb[2] + color.rgb[2] }; }
 };
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
@@ -127,28 +140,20 @@ RGB calculateBlur(Image& source, int u, int v)
 		{
 			if (u + i < 0 || u + i >= source.width || v + j < 0 || v + j >= source.height)
 				continue;
-			RGB newRGB = getRGBAtPosition(source, u + i, v + j);
-			r += newRGB[0];
-			g += newRGB[1];
-			b += newRGB[2];
 			
+			rgb = rgb + getRGBAtPosition(source, u + i, v + j);
 			count++;
 		}
 	}
 
-	rgb[0] = r / count;
-	rgb[1] = g / count;
-	rgb[2] = b / count;
+	rgb = rgb / count;
 	return rgb;
 }
 
 RGB getRGBAtPosition(Image &source, int u, int v)
 {
 	int p = getPosition(source, u, v);
-	RGB rgb;
-	rgb[0] = source.img[p];
-	rgb[1] = source.img[p + 1];
-	rgb[2] = source.img[p + 2];
+	RGB rgb = RGB(source.img[p], source.img[p + 1], source.img[p + 2]);
 	return rgb;
 }
 
