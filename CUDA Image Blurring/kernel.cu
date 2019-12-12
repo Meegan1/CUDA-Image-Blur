@@ -9,6 +9,7 @@
 #define CHECK(e) { int res = (e); if (res) printf("CUDA ERROR %d\n", res); }
 
 #define CHANNEL 3
+#define MAX_THREADS 1024
 
 struct Image {
 	int width;
@@ -25,27 +26,27 @@ struct RGB
 
 	RGB() = default;
 
-	RGB(int r, int g, int b)
+	__device__ RGB(int r, int g, int b)
 	{
 		rgb[0] = r;
 		rgb[1] = g;
 		rgb[2] = b;
 	}
 
-	Color & operator[](int i)
+	__device__ Color & operator[](int i)
 	{
 		return rgb[i];
 	}
 
-	RGB operator / (int num) { return { rgb[0] / num, rgb[1] / num, rgb[2] / num }; }
-	RGB operator + (const RGB& color) { return { rgb[0] + color.rgb[0], rgb[1] + color.rgb[1], rgb[2] + color.rgb[2] }; }
+	__device__ RGB operator / (int num) { return { rgb[0] / num, rgb[1] / num, rgb[2] / num }; }
+	__device__ RGB operator + (const RGB& color) { return { rgb[0] + color.rgb[0], rgb[1] + color.rgb[1], rgb[2] + color.rgb[2] }; }
 };
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-void addBlur(Image& source);
-RGB calculateBlur(Image& source, int u, int v, int gridSize);
-RGB getRGBAtPosition(Image& source, int u, int v);
-int getPosition(Image& source, int u, int v);
+cudaError_t addBlur(Image& source);
+__device__ RGB calculateBlur(unsigned char* source, int u, int v, int width, int height, int gridSize);
+__device__ RGB getRGBAtPosition(unsigned char* source, int u, int v, int width);
+__device__ int getPosition(int u, int v, int width);
 int readInpImg(const char* fname, Image& source, int& max_col_val);
 int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 
@@ -53,6 +54,20 @@ __global__ void addKernel(int *c, const int *a, const int *b)
 {
     int i = threadIdx.x;
     c[i] = a[i] + b[i];
+}
+
+__global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height, int gridSize)
+{
+
+	int tid = threadIdx.x + blockIdx.x * blockDim.x;
+	int v = tid / width;
+	int u = tid % width;
+	
+	int p = getPosition(u, v, width);
+	RGB rgb = calculateBlur(dev_source, u, v, width, height, gridSize);
+	dev_image[p] = rgb[0];
+	dev_image[p + 1] = rgb[1];
+	dev_image[p + 2] = rgb[2];
 }
 
 int main(int argc, char** argv)
@@ -72,60 +87,74 @@ int main(int argc, char** argv)
 
 	// Complete the code
 	addBlur(source);
+	cudaError_t cudaStatus = addBlur(source);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "addWithCuda failed!");
+		return 1;
+	}
 
+
+	// cudaDeviceReset must be called before exiting in order for profiling and
+	// tracing tools such as Nsight and Visual Profiler to show complete traces.
+	cudaStatus = cudaDeviceReset();
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaDeviceReset failed!");
+		return 1;
+	}
 
 	// Write the output file
 	if (writeOutImg("roted.ppm", source, max_col_val) != 0) // For demonstration, the input file is written to a new file named "roted.ppm" 
 		exit(1);
 
 	free(source.img);
-
-	exit(0);
-	
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
-
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
-    }
-
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
-
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
-
     return 0;
 }
 
-void addBlur(Image &source)
+cudaError_t addBlur(Image &source)
 {
-	for (int v = 0; v < source.height; v++)
-	{
-		for(int u = 0; u < source.width; u++)
-		{
-			int p = getPosition(source, u, v);
-			RGB rgb = calculateBlur(source, u, v, 3);
-			source.dev_img[p] = rgb[0];
-			source.dev_img[p+1] = rgb[1];
-			source.dev_img[p+2] = rgb[2];
-		}
+	cudaError_t cudaStatus;
+
+	// Choose which GPU to run on, change this on a multi-GPU system.
+	cudaStatus = cudaSetDevice(0);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
+		goto Error;
 	}
+
+	int width = source.width;
+	int height = source.height;
+	int size = width * height * 3 * sizeof(unsigned char);
+	
+	unsigned char* dev_source;
+	cudaMalloc((void**)&dev_source, size);
+	
+	unsigned char* dev_image;
+	cudaMalloc((void**)&dev_image, size);
+
+	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
+
+	rgbKernel <<< (width*height)/MAX_THREADS, MAX_THREADS >>> (dev_source, dev_image, width, height, 3);
+
+	unsigned char* test = (unsigned char*) malloc(size);
+	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
+	
+
+	cudaDeviceSynchronize();
+
+
+	int i = 0;
+	
+
+Error:
+	cudaFree(dev_source);
+	cudaFree(dev_image);
+
+	return cudaStatus;
 }
 
-RGB calculateBlur(Image& source, int u, int v, int gridSize)
+RGB calculateBlur(unsigned char* source, int u, int v, int width, int height, int gridSize)
 {
-	int p = getPosition(source, u, v);
+	int p = getPosition(u, v, width);
 	RGB rgb;
 
 	int count = 0;
@@ -134,10 +163,10 @@ RGB calculateBlur(Image& source, int u, int v, int gridSize)
 	for (int j = -j_bound; j <= j_bound; j++) {
 		for (int i = -i_bound; i <= i_bound; i++)
 		{
-			if (u + i < 0 || u + i >= source.width || v + j < 0 || v + j >= source.height) // skip if past edge of image
+			if (u + i < 0 || u + i >= width || v + j < 0 || v + j >= height) // skip if past edge of image
 				continue;
 			
-			rgb = rgb + getRGBAtPosition(source, u + i, v + j);
+			rgb = rgb + getRGBAtPosition(source, u + i, v + j, width);
 			count++;
 		}
 	}
@@ -146,16 +175,16 @@ RGB calculateBlur(Image& source, int u, int v, int gridSize)
 	return rgb;
 }
 
-RGB getRGBAtPosition(Image &source, int u, int v)
+RGB getRGBAtPosition(unsigned char* source, int u, int v, int width)
 {
-	int p = getPosition(source, u, v);
-	RGB rgb = RGB(source.img[p], source.img[p + 1], source.img[p + 2]);
+	int p = getPosition(u, v, width);
+	RGB rgb = RGB(source[p], source[p + 1], source[p + 2]);
 	return rgb;
 }
 
-int getPosition(Image& source, int u, int v)
+int getPosition(int u, int v, int width)
 {
-	return (u + (v * source.width)) * CHANNEL;
+	return (u + (v * width)) * CHANNEL;
 }
 
 // Reads a color PPM image file (name provided), and
