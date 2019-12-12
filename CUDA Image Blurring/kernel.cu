@@ -141,10 +141,6 @@ cudaError_t addBlur(Image &source)
 
 	cudaDeviceSynchronize();
 
-
-	int i = 0;
-	
-
 Error:
 	cudaFree(dev_source);
 	cudaFree(dev_image);
