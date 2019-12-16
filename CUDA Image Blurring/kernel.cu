@@ -136,7 +136,6 @@ cudaError_t addBlur(Image &source)
 	cudaEventRecord(start, 0);
 	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height, 3);
 
-	unsigned char* test = (unsigned char*) malloc(size);
 	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
 
 	cudaEventRecord(stop, 0);	
