@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <vector>
+#include <iostream>
 
 #define CHECK(e) { int res = (e); if (res) printf("CUDA ERROR %d\n", res); }
 
@@ -129,14 +130,25 @@ cudaError_t addBlur(Image &source)
 	dim3 thread_size(32, 32);
 	dim3 block_size(width/thread_size.x, height/thread_size.y);
 
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
 	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height, 3);
 
 	unsigned char* test = (unsigned char*) malloc(size);
 	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
-	
+
+	cudaEventRecord(stop, 0);	
+	cudaEventSynchronize(stop);
+	float t;
+	cudaEventElapsedTime(&t, start, stop);
+	std::cout << "Elapsed Time: " << t << std::endl;
+
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
 
 	cudaDeviceSynchronize();
-
 
 	cudaFree(dev_source);
 	cudaFree(dev_image);
