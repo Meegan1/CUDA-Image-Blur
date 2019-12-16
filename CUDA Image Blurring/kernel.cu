@@ -54,9 +54,8 @@ int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height, int gridSize)
 {
 
-	int tid = threadIdx.x + blockIdx.x * blockDim.x;
-	int v = tid / width;
-	int u = tid % width;
+	int u = threadIdx.x + blockIdx.x * blockDim.x;
+	int v = threadIdx.y + blockIdx.y * blockDim.y;
 	
 	int p = getPosition(u, v, width);
 	RGB rgb = calculateBlur(dev_source, u, v, width, height, gridSize);
@@ -127,7 +126,10 @@ cudaError_t addBlur(Image &source)
 
 	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
 
-	rgbKernel <<< (width*height)/MAX_THREADS, MAX_THREADS >>> (dev_source, dev_image, width, height, 3);
+	dim3 thread_size(32, 32);
+	dim3 block_size(width/thread_size.x, height/thread_size.y);
+
+	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height, 3);
 
 	unsigned char* test = (unsigned char*) malloc(size);
 	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
