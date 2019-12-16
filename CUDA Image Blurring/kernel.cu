@@ -171,8 +171,11 @@ __device__
 RGB getRGBAtPosition(unsigned char* source, int u, int v, int width)
 {
 	int p = getPosition(u, v, width);
-	RGB rgb = RGB(source[p], source[p + 1], source[p + 2]);
-	return rgb;
+	unsigned char rgb[3];
+	memcpy(&rgb, &source[p], sizeof(unsigned char) * CHANNEL);
+
+	RGB temp_rgb = RGB(rgb[0], rgb[1], rgb[2]);
+	return temp_rgb;
 }
 
 __device__
