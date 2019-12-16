@@ -24,6 +24,7 @@ struct RGB
 {
 	Color rgb[3]{0};
 
+	__device__
 	RGB() = default;
 
 	__device__ RGB(int r, int g, int b)
@@ -112,7 +113,6 @@ cudaError_t addBlur(Image &source)
 	cudaStatus = cudaSetDevice(0);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-		goto Error;
 	}
 
 	int width = source.width;
@@ -135,13 +135,13 @@ cudaError_t addBlur(Image &source)
 
 	cudaDeviceSynchronize();
 
-Error:
+
 	cudaFree(dev_source);
 	cudaFree(dev_image);
-
 	return cudaStatus;
 }
 
+__device__
 RGB calculateBlur(unsigned char* source, int u, int v, int width, int height, int gridSize)
 {
 	int p = getPosition(u, v, width);
@@ -165,6 +165,7 @@ RGB calculateBlur(unsigned char* source, int u, int v, int width, int height, in
 	return rgb;
 }
 
+__device__
 RGB getRGBAtPosition(unsigned char* source, int u, int v, int width)
 {
 	int p = getPosition(u, v, width);
@@ -172,6 +173,7 @@ RGB getRGBAtPosition(unsigned char* source, int u, int v, int width)
 	return rgb;
 }
 
+__device__
 int getPosition(int u, int v, int width)
 {
 	return (u + (v * width)) * CHANNEL;
