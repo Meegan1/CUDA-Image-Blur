@@ -10,7 +10,8 @@
 #define CHECK(e) { int res = (e); if (res) printf("CUDA ERROR %d\n", res); }
 
 #define CHANNEL 3
-#define MAX_THREADS 1024
+#define BLOCK_SIZE 32
+#define GRID_SIZE 3
 
 struct Image {
 	int width;
@@ -20,49 +21,56 @@ struct Image {
 	unsigned char* dev_img;
 };
 
-typedef int Color;
-struct RGB
-{
-	Color rgb[3]{0};
-
-	__device__
-	RGB() = default;
-
-	__device__ RGB(int r, int g, int b)
-	{
-		rgb[0] = r;
-		rgb[1] = g;
-		rgb[2] = b;
-	}
-
-	__device__ Color & operator[](int i)
-	{
-		return rgb[i];
-	}
-
-	__device__ RGB operator / (int num) { return { rgb[0] / num, rgb[1] / num, rgb[2] / num }; }
-	__device__ RGB operator + (const RGB& color) { return { rgb[0] + color.rgb[0], rgb[1] + color.rgb[1], rgb[2] + color.rgb[2] }; }
-};
-
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
 cudaError_t addBlur(Image& source);
-__device__ RGB calculateBlur(unsigned char* source, int u, int v, int width, int height, int gridSize);
-__device__ RGB getRGBAtPosition(unsigned char* source, int u, int v, int width);
-__device__ int getPosition(int u, int v, int width);
 int readInpImg(const char* fname, Image& source, int& max_col_val);
 int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 
-__global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height, int gridSize)
+__global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height)
 {
+	int bx = blockIdx.x, by = blockIdx.y, tx = threadIdx.x, ty = threadIdx.y;
+	__shared__ unsigned char shared_source[(BLOCK_SIZE + GRID_SIZE) * (BLOCK_SIZE + GRID_SIZE) * 3];
 
-	int u = threadIdx.x + blockIdx.x * blockDim.x;
-	int v = threadIdx.y + blockIdx.y * blockDim.y;
+	int u = tx + bx * blockDim.x;
+	int v = ty + by * blockDim.y;
+	int src = (u + (v * width)) * CHANNEL;
+	int index = ((tx) + (ty * (BLOCK_SIZE))) * 3;
+	int x = index % BLOCK_SIZE;
+	int y = index / BLOCK_SIZE;
+
+	if (u >= 0 && u < width && v >= 0 && v < height)
+	{
+		shared_source[index] = dev_source[src];
+		shared_source[index + 1] = dev_source[src + 1];
+		shared_source[index + 2] = dev_source[src + 2];
+	}
+
+	__syncthreads();
+
+	// if (x < (GRID_SIZE) || x > (BLOCK_SIZE) || y < GRID_SIZE || y > BLOCK_SIZE)
+	// 	return;
+
+	int r = 0, g = 0, b = 0;
+	int count = 0;
+	for (int j = 0; j < GRID_SIZE; j++) {
+		for (int i = 0; i < GRID_SIZE; i++)
+		{
+			index = ((tx+i) + ((ty+j) * (BLOCK_SIZE))) * 3;
+			r += shared_source[index];
+			g += shared_source[index + 1];
+			b += shared_source[index + 2];
+			//
+			// int index = ((u+i) + ((v+j) * width)) * CHANNEL;
+			// r += dev_source[index];
+			// g += dev_source[index + 1];
+			// b += dev_source[index + 2];
+			count++;
+		}
+	}
 	
-	int p = getPosition(u, v, width);
-	RGB rgb = calculateBlur(dev_source, u, v, width, height, gridSize);
-	dev_image[p] = rgb[0];
-	dev_image[p + 1] = rgb[1];
-	dev_image[p + 2] = rgb[2];
+	dev_image[src] = r / count;
+	dev_image[src + 1] = g / count;
+	dev_image[src + 2] = b / count;
 }
 
 int main(int argc, char** argv)
@@ -127,72 +135,30 @@ cudaError_t addBlur(Image &source)
 
 	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
 
-	dim3 thread_size(32, 32);
-	dim3 block_size(width/thread_size.x, height/thread_size.y);
+	dim3 thread_size(BLOCK_SIZE, BLOCK_SIZE);
+	dim3 block_size(ceil(width/thread_size.x), ceil(height/thread_size.y));
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
-	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height, 3);
+	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height);
 
 	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
 
 	cudaEventRecord(stop, 0);	
 	cudaEventSynchronize(stop);
-	float t;
+	float t = 0;
 	cudaEventElapsedTime(&t, start, stop);
 	std::cout << "Elapsed Time: " << t << std::endl;
 
 	cudaEventDestroy(start);
 	cudaEventDestroy(stop);
 
-	cudaDeviceSynchronize();
 
 	cudaFree(dev_source);
 	cudaFree(dev_image);
 	return cudaStatus;
-}
-
-__device__
-RGB calculateBlur(unsigned char* source, int u, int v, int width, int height, int gridSize)
-{
-	int p = getPosition(u, v, width);
-	RGB rgb;
-
-	int count = 0;
-	int i_bound = gridSize / 2;
-	int j_bound = gridSize / 2;
-	for (int j = -j_bound; j <= j_bound; j++) {
-		for (int i = -i_bound; i <= i_bound; i++)
-		{
-			if (u + i < 0 || u + i >= width || v + j < 0 || v + j >= height) // skip if past edge of image
-				continue;
-			
-			rgb = rgb + getRGBAtPosition(source, u + i, v + j, width);
-			count++;
-		}
-	}
-
-	rgb = rgb / count;
-	return rgb;
-}
-
-__device__
-RGB getRGBAtPosition(unsigned char* source, int u, int v, int width)
-{
-	int p = getPosition(u, v, width);
-	unsigned char rgb[3];
-	memcpy(&rgb, &source[p], sizeof(unsigned char) * CHANNEL);
-
-	RGB temp_rgb = RGB(rgb[0], rgb[1], rgb[2]);
-	return temp_rgb;
-}
-
-__device__
-int getPosition(int u, int v, int width)
-{
-	return (u + (v * width)) * CHANNEL;
 }
 
 // Reads a color PPM image file (name provided), and
