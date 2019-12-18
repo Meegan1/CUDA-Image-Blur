@@ -10,8 +10,8 @@
 #define CHECK(e) { int res = (e); if (res) printf("CUDA ERROR %d\n", res); }
 
 #define CHANNEL 3
-#define BLOCK_SIZE 16
-#define GRID_RADIUS 3
+#define BLOCK_SIZE 32
+#define GRID_RADIUS 5
 
 struct Image {
 	int width;
@@ -31,31 +31,22 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int bx = blockIdx.x, by = blockIdx.y, tx = threadIdx.x, ty = threadIdx.y, bdx = blockDim.x, bdy = blockDim.y;
 
 	// variables for accessing shared image (block co-ords)
-	int row = by * (bdy) + ty;
-	int col = bx * (bdx) + tx;
+	int row = by * bdy + ty;
+	int col = bx * bdx + tx;
 	int index = (ty * (bdx) + tx) * CHANNEL;
 
-	if (row >= height + GRID_RADIUS || col >= width + GRID_RADIUS)
-		return;
-
 	// variables for accessing input image (screen co-ords)
-	int sRow = row - GRID_RADIUS;
-	int sCol = col - GRID_RADIUS;
+	int sRow = row;
+	int sCol = col;
 	int src = (sRow * width + sCol) * CHANNEL;
 
-	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)+1) * (BLOCK_SIZE + (GRID_RADIUS * 2)+1) * 3]; // size with apron
+	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)) * (BLOCK_SIZE + (GRID_RADIUS * 2)) * 3]; // size with apron
 
 	if (sCol >= 0 && sCol < width && sRow >= 0 && sRow < height)
 	{
 		shared_source[index] = dev_source[src];
 		shared_source[index + 1] = dev_source[src + 1];
 		shared_source[index + 2] = dev_source[src + 2];
-	}
-	else
-	{
-		shared_source[index] = 0;
-		shared_source[index + 1] = 0;
-		shared_source[index + 2] = 0;
 	}
 
 	__syncthreads();
@@ -72,13 +63,24 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 				int filterRow = cornerRow + j;
 				int filterCol = cornerCol + i;
 
-				if (filterRow >= 0 && filterRow < height && filterCol >= 0 && filterCol < width)
+				if (filterCol >= bdx || filterRow >= bdy || filterCol < 0 || filterRow < 0)
 				{
+					int y = by * bdy + filterRow;
+					int x = bx * bdx + filterCol;
+
+					if (x < 0 || x >= width || y < 0 || y >= height)
+						continue;
+					
+					r += dev_source[(y * width + x) * CHANNEL];
+					g += dev_source[(y * width + x) * CHANNEL + 1];
+					b += dev_source[(y * width + x) * CHANNEL + 2];
+				}
+				else {
 					r += shared_source[(filterRow * bdx + filterCol) * CHANNEL];
 					g += shared_source[((filterRow * bdx + filterCol) * CHANNEL) + 1];
 					b += shared_source[((filterRow * bdx + filterCol) * CHANNEL) + 2];
-					count++;
 				}
+				count++;
 			}
 		}
 		dev_image[src] = r / count;
@@ -181,7 +183,7 @@ cudaError_t addBlur(Image &source)
 
 	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
 
-	dim3 thread_size(BLOCK_SIZE + (GRID_RADIUS*2), BLOCK_SIZE + (GRID_RADIUS*2));
+	dim3 thread_size(BLOCK_SIZE, BLOCK_SIZE);
 	dim3 block_size(ceil(width/BLOCK_SIZE), ceil(height/BLOCK_SIZE));
 
 	cudaEvent_t start, stop;
