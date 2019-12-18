@@ -11,7 +11,7 @@
 
 #define CHANNEL 3
 #define BLOCK_SIZE 32
-#define GRID_RADIUS 1
+#define GRID_SIZE 5
 
 struct Image {
 	int width;
@@ -21,13 +21,13 @@ struct Image {
 	unsigned char* dev_img;
 };
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-cudaError_t addBlur(Image& source);
+void addBlur(Image& source);
 int readInpImg(const char* fname, Image& source, int& max_col_val);
 int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 
-__global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height)
+__global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height, int grid_radius)
 {
+	// get block info
 	int bx = blockIdx.x, by = blockIdx.y, tx = threadIdx.x, ty = threadIdx.y, bdx = blockDim.x, bdy = blockDim.y;
 
 	// variables for accessing shared image (block co-ords)
@@ -35,14 +35,12 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int col = bx * bdx + tx;
 	int index = (ty * (bdx) + tx) * CHANNEL;
 
-	// variables for accessing input image (screen co-ords)
-	int sRow = row;
-	int sCol = col;
-	int src = (sRow * width + sCol) * CHANNEL;
+	// variable for accessing input image (image co-ords)
+	int src = (row * width + col) * CHANNEL;
 
-	__shared__ unsigned char shared_source[(BLOCK_SIZE) * (BLOCK_SIZE) * 3]; // size with apron
+	__shared__ unsigned char shared_source[(BLOCK_SIZE) * (BLOCK_SIZE) * 3]; // create shared variable for input image
 
-	if (sCol >= 0 && sCol < width && sRow >= 0 && sRow < height)
+	if (col >= 0 && col < width && row >= 0 && row < height)
 	{
 		shared_source[index] = dev_source[src];
 		shared_source[index + 1] = dev_source[src + 1];
@@ -53,8 +51,8 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 
 	int r = 0, g = 0, b = 0;
 	int count = 0;
-	for (int i = -GRID_RADIUS; i <= GRID_RADIUS; i++) {
-		for (int j = -GRID_RADIUS; j <= GRID_RADIUS; j++) {
+	for (int i = -grid_radius; i <= grid_radius; i++) {
+		for (int j = -grid_radius; j <= grid_radius; j++) {
 			int filter_row = ty + j;
 			int filter_col = tx + i;
 
@@ -102,20 +100,9 @@ int main(int argc, char** argv)
 
 	// Complete the code
 	addBlur(source);
-	cudaError_t cudaStatus = addBlur(source);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "addBlur failed!");
-		return 1;
-	}
 
+	cudaDeviceReset();
 
-	// cudaDeviceReset must be called before exiting in order for profiling and
-	// tracing tools such as Nsight and Visual Profiler to show complete traces.
-	cudaStatus = cudaDeviceReset();
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaDeviceReset failed!");
-		return 1;
-	}
 
 	// Write the output file
 	if (writeOutImg("roted.ppm", source, max_col_val) != 0) // For demonstration, the input file is written to a new file named "roted.ppm" 
@@ -125,16 +112,8 @@ int main(int argc, char** argv)
     return 0;
 }
 
-cudaError_t addBlur(Image &source)
+void addBlur(Image &source)
 {
-	cudaError_t cudaStatus;
-
-	// Choose which GPU to run on, change this on a multi-GPU system.
-	cudaStatus = cudaSetDevice(0);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-	}
-
 	int width = source.width;
 	int height = source.height;
 	int size = width * height * 3 * sizeof(unsigned char);
@@ -154,7 +133,7 @@ cudaError_t addBlur(Image &source)
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
-	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height);
+	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height, GRID_SIZE/2);
 
 	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
 
@@ -170,7 +149,6 @@ cudaError_t addBlur(Image &source)
 
 	cudaFree(dev_source);
 	cudaFree(dev_image);
-	return cudaStatus;
 }
 
 // Reads a color PPM image file (name provided), and
