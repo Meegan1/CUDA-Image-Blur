@@ -11,7 +11,7 @@
 
 #define CHANNEL 3
 #define BLOCK_SIZE 16
-#define GRID_RADIUS 2
+#define GRID_RADIUS 3
 
 struct Image {
 	int width;
@@ -64,11 +64,11 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int count = 0;
 
 
-		int cornerRow = ty - GRID_RADIUS;
-		int cornerCol = tx - GRID_RADIUS;
-
-		for (int i = 0; i < 2 * GRID_RADIUS; i++) {
-			for (int j = 0; j < 2 * GRID_RADIUS; j++) {
+	int cornerRow = ty - GRID_RADIUS/2;
+	int cornerCol = tx - GRID_RADIUS/2;
+	if(cornerRow >= 0 && cornerCol >= 0) {
+		for (int i = -GRID_RADIUS; i < GRID_RADIUS; i++) {
+			for (int j = -GRID_RADIUS; j < GRID_RADIUS; j++) {
 				int filterRow = cornerRow + j;
 				int filterCol = cornerCol + i;
 
@@ -84,7 +84,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 		dev_image[src] = r / count;
 		dev_image[src + 1] = g / count;
 		dev_image[src + 2] = b / count;
-
+	}
 	return;
 
 	// u = tx + bx * (BLOCK_SIZE - (GRID_RADIUS * 2));
