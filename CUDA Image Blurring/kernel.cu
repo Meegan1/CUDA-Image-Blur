@@ -11,7 +11,7 @@
 
 #define CHANNEL 3
 #define BLOCK_SIZE 32
-#define GRID_RADIUS 5
+#define GRID_RADIUS 1
 
 struct Image {
 	int width;
@@ -40,7 +40,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int sCol = col;
 	int src = (sRow * width + sCol) * CHANNEL;
 
-	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)) * (BLOCK_SIZE + (GRID_RADIUS * 2)) * 3]; // size with apron
+	__shared__ unsigned char shared_source[(BLOCK_SIZE) * (BLOCK_SIZE) * 3]; // size with apron
 
 	if (sCol >= 0 && sCol < width && sRow >= 0 && sRow < height)
 	{
@@ -53,72 +53,36 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 
 	int r = 0, g = 0, b = 0;
 	int count = 0;
+	for (int i = -GRID_RADIUS; i <= GRID_RADIUS; i++) {
+		for (int j = -GRID_RADIUS; j <= GRID_RADIUS; j++) {
+			int filter_row = ty + j;
+			int filter_col = tx + i;
 
+			if (filter_col >= bdx || filter_row >= bdy || filter_col < 0 || filter_row < 0)
+			{
+				int y = by * bdy + filter_row;
+				int x = bx * bdx + filter_col;
 
-	int cornerRow = ty;
-	int cornerCol = tx;
-	if(cornerRow >= 0 && cornerCol >= 0 && cornerCol <= bdx && cornerRow <= bdy) {
-		for (int i = -GRID_RADIUS; i <= GRID_RADIUS; i++) {
-			for (int j = -GRID_RADIUS; j <= GRID_RADIUS; j++) {
-				int filterRow = cornerRow + j;
-				int filterCol = cornerCol + i;
+				if (x < 0 || x >= width || y < 0 || y >= height)
+					continue;
 
-				if (filterCol >= bdx || filterRow >= bdy || filterCol < 0 || filterRow < 0)
-				{
-					int y = by * bdy + filterRow;
-					int x = bx * bdx + filterCol;
-
-					if (x < 0 || x >= width || y < 0 || y >= height)
-						continue;
-					
-					r += dev_source[(y * width + x) * CHANNEL];
-					g += dev_source[(y * width + x) * CHANNEL + 1];
-					b += dev_source[(y * width + x) * CHANNEL + 2];
-				}
-				else {
-					r += shared_source[(filterRow * bdx + filterCol) * CHANNEL];
-					g += shared_source[((filterRow * bdx + filterCol) * CHANNEL) + 1];
-					b += shared_source[((filterRow * bdx + filterCol) * CHANNEL) + 2];
-				}
-				count++;
+				int index = (y * width + x) * CHANNEL;
+				r += dev_source[index];
+				g += dev_source[index + 1];
+				b += dev_source[index + 2];
 			}
-		}
-		dev_image[src] = r / count;
-		dev_image[src + 1] = g / count;
-		dev_image[src + 2] = b / count;
-	}
-	return;
-
-	// u = tx + bx * (BLOCK_SIZE - (GRID_RADIUS * 2));
-	// v = ty + by * (BLOCK_SIZE - (GRID_RADIUS * 2));
-
-
-	for (int j = -GRID_RADIUS; j <= GRID_RADIUS; j++) {
-		for (int i = -GRID_RADIUS; i <= GRID_RADIUS; i++)
-		{
-			// index = ((tx+i + GRID_RADIUS) + ((ty+j + GRID_RADIUS) * (BLOCK_SIZE * (GRID_RADIUS * 2)))) * 3;
-			// index = ((tx+i) + ((ty+j) * (BLOCK_SIZE + (GRID_RADIUS * 2)))) * 3;
-
-			// r += shared_source[index];
-			// g += shared_source[index + 1];
-			// b += shared_source[index + 2];
-			
-			// int index = ((u+i) + ((v+j) * width)) * CHANNEL;
-			// r += dev_source[index];
-			// g += dev_source[index + 1];
-			// b += dev_source[index + 2];
-
-			//
-			// r += dev_source[src];
-			// g += dev_source[src + 1];
-			// b += dev_source[src + 2];
+			else {
+				int index = (filter_row * bdx + filter_col) * CHANNEL;
+				r += shared_source[index];
+				g += shared_source[index + 1];
+				b += shared_source[index + 2];
+			}
 			count++;
 		}
 	}
-	//
-	// dev_image[src] = r / count;
-	// dev_image[src + 1] = g / count;
-	// dev_image[src + 2] = b / count;
+	dev_image[src] = r / count;
+	dev_image[src + 1] = g / count;
+	dev_image[src + 2] = b / count;
 }
 
 int main(int argc, char** argv)
