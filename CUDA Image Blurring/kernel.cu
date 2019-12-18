@@ -4,14 +4,15 @@
 
 #include <stdio.h>
 #include <cstdlib>
-#include <vector>
 #include <iostream>
 #include <string>
 
 #define CHECK(e) { int res = (e); if (res) printf("CUDA ERROR %d\n", res); }
 
+// RGB channels
 #define CHANNEL 3
 
+// struct for image
 struct Image {
 	int width;
 	int height;
@@ -20,10 +21,14 @@ struct Image {
 	unsigned char* dev_img;
 };
 
+// headers
 void addBlur(Image& source, int block_size, int grid_size);
 int readInpImg(const char* fname, Image& source, int& max_col_val);
 int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 
+/*
+ * Kernel for generating blur from an image
+ */
 __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height, int grid_radius)
 {
 	// get block info
@@ -60,7 +65,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 				int y = by * bdy + filter_row;
 				int x = bx * bdx + filter_col;
 
-				if (x < 0 || x >= width || y < 0 || y >= height)
+				if (x < 0 || x >= width || y < 0 || y >= height) // make sure bounds inside image
 					continue;
 
 				int index = (y * width + x) * CHANNEL;
