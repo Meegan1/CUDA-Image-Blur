@@ -43,7 +43,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int sCol = col - GRID_RADIUS;
 	int src = (sRow * width + sCol) * CHANNEL;
 
-	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)+1) * (BLOCK_SIZE + (GRID_RADIUS * 2)+1) * 3]; // size with apron
+	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)) * (BLOCK_SIZE + (GRID_RADIUS * 2)) * 3]; // size with apron
 
 	if (sCol >= 0 && sCol < width && sRow >= 0 && sRow < height)
 	{
@@ -63,8 +63,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int r = 0, g = 0, b = 0;
 	int count = 0;
 
-	if (tx >= GRID_RADIUS && ty >= GRID_RADIUS && ty < bdy - GRID_RADIUS && tx < bdx - GRID_RADIUS)
-	{
+
 		int cornerRow = ty - GRID_RADIUS;
 		int cornerCol = tx - GRID_RADIUS;
 
@@ -85,7 +84,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 		dev_image[src] = r / count;
 		dev_image[src + 1] = g / count;
 		dev_image[src + 2] = b / count;
-	}
+
 	return;
 
 	// u = tx + bx * (BLOCK_SIZE - (GRID_RADIUS * 2));
@@ -182,7 +181,7 @@ cudaError_t addBlur(Image &source)
 
 	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
 
-	dim3 thread_size(BLOCK_SIZE + (GRID_RADIUS*2)+1, BLOCK_SIZE + (GRID_RADIUS*2)+1);
+	dim3 thread_size(BLOCK_SIZE + (GRID_RADIUS*2), BLOCK_SIZE + (GRID_RADIUS*2));
 	dim3 block_size(ceil(width/BLOCK_SIZE), ceil(height/BLOCK_SIZE));
 
 	cudaEvent_t start, stop;
