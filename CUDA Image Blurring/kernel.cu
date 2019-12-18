@@ -6,12 +6,11 @@
 #include <cstdlib>
 #include <vector>
 #include <iostream>
+#include <string>
 
 #define CHECK(e) { int res = (e); if (res) printf("CUDA ERROR %d\n", res); }
 
 #define CHANNEL 3
-#define BLOCK_SIZE 32
-#define GRID_SIZE 5
 
 struct Image {
 	int width;
@@ -21,7 +20,7 @@ struct Image {
 	unsigned char* dev_img;
 };
 
-void addBlur(Image& source);
+void addBlur(Image& source, int block_size, int grid_size);
 int readInpImg(const char* fname, Image& source, int& max_col_val);
 int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 
@@ -33,15 +32,14 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	// variables for accessing shared image (block co-ords)
 	int row = by * bdy + ty;
 	int col = bx * bdx + tx;
-	int index = (ty * (bdx) + tx) * CHANNEL;
-
-	// variable for accessing input image (image co-ords)
+	// variable for accessing input image (1d image co-ords)
 	int src = (row * width + col) * CHANNEL;
 
-	__shared__ unsigned char shared_source[(BLOCK_SIZE) * (BLOCK_SIZE) * 3]; // create shared variable for input image
+	extern __shared__ unsigned char shared_source[]; // create shared variable for input image
 
 	if (col >= 0 && col < width && row >= 0 && row < height)
 	{
+		int index = (ty * (bdx)+tx) * CHANNEL; // get index for 1d shared memory image
 		shared_source[index] = dev_source[src];
 		shared_source[index + 1] = dev_source[src + 1];
 		shared_source[index + 2] = dev_source[src + 2];
@@ -49,13 +47,14 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 
 	__syncthreads();
 
-	int r = 0, g = 0, b = 0;
-	int count = 0;
+	int r = 0, g = 0, b = 0; // total rgb
+	int count = 0; // count number of additions
 	for (int i = -grid_radius; i <= grid_radius; i++) {
 		for (int j = -grid_radius; j <= grid_radius; j++) {
 			int filter_row = ty + j;
 			int filter_col = tx + i;
 
+			// if outside bounds of shared image, fetch from global memory
 			if (filter_col >= bdx || filter_row >= bdy || filter_col < 0 || filter_row < 0)
 			{
 				int y = by * bdy + filter_row;
@@ -69,7 +68,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 				g += dev_source[index + 1];
 				b += dev_source[index + 2];
 			}
-			else {
+			else { // otherwise retrieve rgb from shared memory
 				int index = (filter_row * bdx + filter_col) * CHANNEL;
 				r += shared_source[index];
 				g += shared_source[index + 1];
@@ -78,6 +77,8 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 			count++;
 		}
 	}
+
+	// calculate and set average rgb
 	dev_image[src] = r / count;
 	dev_image[src + 1] = g / count;
 	dev_image[src + 2] = b / count;
@@ -85,24 +86,24 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 
 int main(int argc, char** argv)
 {
-	if (argc != 2)
+	if (argc != 4)
 	{
-		printf("Usage: exec filename\n");
+		printf("Usage: exec filename block_size grid_size\n");
 		exit(1);
 	}
 	char* fname = argv[1];
+	int blocksize = std::stoi(argv[2]); // set number of threads in block (n x n)
+	int gridsize = std::stoi(argv[3]); // set total width of grid for filter
 
 	//Read the input file
 	Image source;
 	int max_col_val;
 	if (readInpImg(fname, source, max_col_val) != 0)  exit(1);
 
-
 	// Complete the code
-	addBlur(source);
+	addBlur(source, blocksize, gridsize);
 
 	cudaDeviceReset();
-
 
 	// Write the output file
 	if (writeOutImg("roted.ppm", source, max_col_val) != 0) // For demonstration, the input file is written to a new file named "roted.ppm" 
@@ -112,41 +113,50 @@ int main(int argc, char** argv)
     return 0;
 }
 
-void addBlur(Image &source)
+void addBlur(Image &source, int block_size, int grid_size)
 {
+	// get/set image variables
 	int width = source.width;
 	int height = source.height;
 	int size = width * height * 3 * sizeof(unsigned char);
-	
+
+	// allocate device memory
 	unsigned char* dev_source;
 	cudaMalloc((void**)&dev_source, size);
 	
 	unsigned char* dev_image;
 	cudaMalloc((void**)&dev_image, size);
 
+	// copy image to device
 	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
 
-	dim3 thread_size(BLOCK_SIZE, BLOCK_SIZE);
-	dim3 block_size(ceil(width/BLOCK_SIZE), ceil(height/BLOCK_SIZE));
+	// define threads/blocks/block size
+	dim3 n_threads(block_size, block_size);
+	dim3 n_blocks(ceil(width/ block_size), ceil(height/ block_size));
+	int shared_size = (block_size * block_size * CHANNEL);
 
+	// record cuda event
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
-	rgbKernel <<< block_size, thread_size >>> (dev_source, dev_image, width, height, GRID_SIZE/2);
 
+	// execute kernel
+	rgbKernel <<< n_blocks, n_threads, shared_size >>> (dev_source, dev_image, width, height, grid_size/2);
+
+	// copy output image from device to host
 	cudaMemcpy(source.dev_img, dev_image, size, cudaMemcpyDeviceToHost);
 
+	// stop recording cuda event
 	cudaEventRecord(stop, 0);	
 	cudaEventSynchronize(stop);
 	float t = 0;
-	cudaEventElapsedTime(&t, start, stop);
-	std::cout << "Elapsed Time: " << t << std::endl;
+	cudaEventElapsedTime(&t, start, stop); // get elapsed time
+	std::cout << "Elapsed Time: " << t << std::endl; // output time
 
+	// clear up memory
 	cudaEventDestroy(start);
 	cudaEventDestroy(stop);
-
-
 	cudaFree(dev_source);
 	cudaFree(dev_image);
 }
