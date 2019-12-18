@@ -43,7 +43,7 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int sCol = col - GRID_RADIUS;
 	int src = (sRow * width + sCol) * CHANNEL;
 
-	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)) * (BLOCK_SIZE + (GRID_RADIUS * 2)) * 3]; // size with apron
+	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)+1) * (BLOCK_SIZE + (GRID_RADIUS * 2)+1) * 3]; // size with apron
 
 	if (sCol >= 0 && sCol < width && sRow >= 0 && sRow < height)
 	{
@@ -64,11 +64,11 @@ __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, i
 	int count = 0;
 
 
-	int cornerRow = ty - GRID_RADIUS/2;
-	int cornerCol = tx - GRID_RADIUS/2;
-	if(cornerRow >= 0 && cornerCol >= 0) {
-		for (int i = -GRID_RADIUS; i < GRID_RADIUS; i++) {
-			for (int j = -GRID_RADIUS; j < GRID_RADIUS; j++) {
+	int cornerRow = ty;
+	int cornerCol = tx;
+	if(cornerRow >= 0 && cornerCol >= 0 && cornerCol <= bdx && cornerRow <= bdy) {
+		for (int i = -GRID_RADIUS; i <= GRID_RADIUS; i++) {
+			for (int j = -GRID_RADIUS; j <= GRID_RADIUS; j++) {
 				int filterRow = cornerRow + j;
 				int filterCol = cornerCol + i;
 
