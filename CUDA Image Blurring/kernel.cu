@@ -11,7 +11,7 @@
 
 #define CHANNEL 3
 #define BLOCK_SIZE 16
-#define GRID_RADIUS 1
+#define GRID_RADIUS 2
 
 struct Image {
 	int width;
@@ -28,57 +28,96 @@ int writeOutImg(const char* fname, const Image& roted, const int max_col_val);
 
 __global__ void rgbKernel(unsigned char* dev_source, unsigned char* dev_image, int width, int height)
 {
-	int bx = blockIdx.x, by = blockIdx.y, tx = threadIdx.x, ty = threadIdx.y;
-	__shared__ unsigned char shared_source[(BLOCK_SIZE + GRID_RADIUS*2) * (BLOCK_SIZE + GRID_RADIUS*2) * 3];
+	int bx = blockIdx.x, by = blockIdx.y, tx = threadIdx.x, ty = threadIdx.y, bdx = blockDim.x, bdy = blockDim.y;
 
-	int u = tx + bx * (BLOCK_SIZE);
-	int v = ty + by * (BLOCK_SIZE);
-	int src = (u + (v * width)) * CHANNEL;
-	int index = (tx + (ty * (BLOCK_SIZE + (GRID_RADIUS*2)))) * 3;
+	// variables for accessing shared image (block co-ords)
+	int row = by * (bdy) + ty;
+	int col = bx * (bdx) + tx;
+	int index = (ty * (bdx) + tx) * CHANNEL;
 
-	if (u >= 0 && u < width && v >= 0 && v < height)
+	if (row >= height + GRID_RADIUS || col >= width + GRID_RADIUS)
+		return;
+
+	// variables for accessing input image (screen co-ords)
+	int sRow = row - GRID_RADIUS;
+	int sCol = col - GRID_RADIUS;
+	int src = (sRow * width + sCol) * CHANNEL;
+
+	__shared__ unsigned char shared_source[(BLOCK_SIZE + (GRID_RADIUS * 2)+1) * (BLOCK_SIZE + (GRID_RADIUS * 2)+1) * 3]; // size with apron
+
+	if (sCol >= 0 && sCol < width && sRow >= 0 && sRow < height)
 	{
 		shared_source[index] = dev_source[src];
 		shared_source[index + 1] = dev_source[src + 1];
 		shared_source[index + 2] = dev_source[src + 2];
 	}
+	else
+	{
+		shared_source[index] = 0;
+		shared_source[index + 1] = 0;
+		shared_source[index + 2] = 0;
+	}
 
-	
-	if (tx < (GRID_RADIUS) || tx > (BLOCK_SIZE) || ty < GRID_RADIUS || ty > BLOCK_SIZE)
-		return;
-	
 	__syncthreads();
-
-	u = tx + bx * (BLOCK_SIZE - (GRID_RADIUS * 2));
-	v = ty + by * (BLOCK_SIZE - (GRID_RADIUS * 2));
 
 	int r = 0, g = 0, b = 0;
 	int count = 0;
+
+	if (tx >= GRID_RADIUS && ty >= GRID_RADIUS && ty < bdy - GRID_RADIUS && tx < bdx - GRID_RADIUS)
+	{
+		int cornerRow = ty - GRID_RADIUS;
+		int cornerCol = tx - GRID_RADIUS;
+
+		for (int i = 0; i < 2 * GRID_RADIUS; i++) {
+			for (int j = 0; j < 2 * GRID_RADIUS; j++) {
+				int filterRow = cornerRow + j;
+				int filterCol = cornerCol + i;
+
+				if (filterRow >= 0 && filterRow < height && filterCol >= 0 && filterCol < width)
+				{
+					r += shared_source[(filterRow * bdx + filterCol) * CHANNEL];
+					g += shared_source[((filterRow * bdx + filterCol) * CHANNEL) + 1];
+					b += shared_source[((filterRow * bdx + filterCol) * CHANNEL) + 2];
+					count++;
+				}
+			}
+		}
+		dev_image[src] = r / count;
+		dev_image[src + 1] = g / count;
+		dev_image[src + 2] = b / count;
+	}
+	return;
+
+	// u = tx + bx * (BLOCK_SIZE - (GRID_RADIUS * 2));
+	// v = ty + by * (BLOCK_SIZE - (GRID_RADIUS * 2));
+
+
 	for (int j = -GRID_RADIUS; j <= GRID_RADIUS; j++) {
 		for (int i = -GRID_RADIUS; i <= GRID_RADIUS; i++)
 		{
 			// index = ((tx+i + GRID_RADIUS) + ((ty+j + GRID_RADIUS) * (BLOCK_SIZE * (GRID_RADIUS * 2)))) * 3;
-			index = ((tx+i) + ((ty+j) * (BLOCK_SIZE + (GRID_RADIUS * 2)))) * 3;
-			r += shared_source[index];
-			g += shared_source[index + 1];
-			b += shared_source[index + 2];
+			// index = ((tx+i) + ((ty+j) * (BLOCK_SIZE + (GRID_RADIUS * 2)))) * 3;
+
+			// r += shared_source[index];
+			// g += shared_source[index + 1];
+			// b += shared_source[index + 2];
 			
 			// int index = ((u+i) + ((v+j) * width)) * CHANNEL;
 			// r += dev_source[index];
 			// g += dev_source[index + 1];
 			// b += dev_source[index + 2];
 
-			
+			//
 			// r += dev_source[src];
 			// g += dev_source[src + 1];
 			// b += dev_source[src + 2];
 			count++;
 		}
 	}
-	
-	dev_image[src] = r / count;
-	dev_image[src + 1] = g / count;
-	dev_image[src + 2] = b / count;
+	//
+	// dev_image[src] = r / count;
+	// dev_image[src + 1] = g / count;
+	// dev_image[src + 2] = b / count;
 }
 
 int main(int argc, char** argv)
@@ -143,7 +182,7 @@ cudaError_t addBlur(Image &source)
 
 	cudaMemcpy(dev_source, source.img, size, cudaMemcpyHostToDevice);
 
-	dim3 thread_size(BLOCK_SIZE + (GRID_RADIUS*2), BLOCK_SIZE + (GRID_RADIUS*2));
+	dim3 thread_size(BLOCK_SIZE + (GRID_RADIUS*2)+1, BLOCK_SIZE + (GRID_RADIUS*2)+1);
 	dim3 block_size(ceil(width/BLOCK_SIZE), ceil(height/BLOCK_SIZE));
 
 	cudaEvent_t start, stop;
